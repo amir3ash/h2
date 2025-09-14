@@ -336,7 +336,7 @@ func (s *Stream) WriteData(data []byte, endStream bool) (n int, err error) {
 		if int32(s.conn.peerSettings.MAX_FRAME_SIZE) < allowed {
 			allowed = int32(s.conn.peerSettings.MAX_FRAME_SIZE)
 		}
-		if allowed <= 0 {
+		if allowed <= 0 && len(data) != 0 {
 			return 0, nil // TODO: change this error
 		}
 		if len(data) > int(allowed) {
