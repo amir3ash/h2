@@ -56,6 +56,8 @@ type Stream struct {
 	trailers []hpack.HeaderField
 
 	startedWg *sync.WaitGroup
+
+	node *priorityNode
 }
 
 func (s *Stream) ID() uint32 {
@@ -135,7 +137,9 @@ func (s *Stream) close(err error) {
 
 	s.closeErr = err
 	s.endStream()
-	s.conn.que.closeSteam(s.id)
+
+	removeQueuedFrames := err != nil
+	s.conn.que.closeSteam(s.id, removeQueuedFrames)
 }
 
 func (s *Stream) endStream() {

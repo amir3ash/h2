@@ -37,7 +37,8 @@ type queueHeaderFrame struct {
 
 type flushingFrame struct {
 	*bytes.Buffer
-	forceFlush bool
+	forceFlush   bool
+	streamClosed bool
 }
 
 type priorityNode struct {
@@ -168,6 +169,15 @@ func (q *PQ) findNext() (data *bytes.Buffer, forceFlush bool) {
 				panic("internal: node have not any frame")
 			}
 
+			if frame.streamClosed {
+				const streamReseted = false
+				q.closeSteam(node.stream.id, streamReseted)
+				node.stream.node = nil
+				node.stream = nil
+				node.dependsOn = nil
+				nodePool.Put(node)
+			}
+
 			q.incrementIdx = !node.exclusive
 			if node.exclusive {
 				q.exclusiveNode = node
@@ -190,13 +200,22 @@ func (q *PQ) findNext() (data *bytes.Buffer, forceFlush bool) {
 	return nil, false
 }
 
+var nodePool = sync.Pool{
+	New: func() any {
+		return &priorityNode{frames: make(chanQ[flushingFrame], 1)}
+	},
+}
+
 func (q *PQ) createNode(stream *Stream, priority PriorityParam) {
-	node := &priorityNode{
+	node := nodePool.Get().(*priorityNode)
+	saveFrames := node.frames
+
+	*node = priorityNode{
 		stream:    stream,
 		weight:    priority.Weight,
 		exclusive: priority.Exclusive,
 		dependsOn: nil,
-		frames:    make(chanQ[flushingFrame], 1),
+		frames:    saveFrames,
 	}
 
 	q.nodesMu.Lock()
@@ -204,20 +223,23 @@ func (q *PQ) createNode(stream *Stream, priority PriorityParam) {
 	node.dependsOn = q.nodes[priority.StreamDep]
 	node.calculateRank()
 	q.nodes[stream.id] = node
+	stream.node = node
 
 	q.nodesMu.Unlock()
 }
 
-func (q *PQ) closeSteam(streamId uint32) {
+// removes the stream from PQ. if forceClose==True, it will removes queued frames.
+func (q *PQ) closeSteam(streamId uint32, forceClose bool) {
 	q.nodesMu.Lock()
 	defer q.nodesMu.Unlock()
 
 	// node := q.nodes[streamId]
 	// q.dataQ[node.rank].remove(node)
-
-	q.headerQ.remove(func(item queueHeaderFrame) bool {
-		return item.streamID == streamId
-	})
+	if forceClose {
+		q.headerQ.remove(func(item queueHeaderFrame) bool {
+			return item.streamID == streamId
+		})
+	}
 
 	delete(q.nodes, streamId)
 	// TODO possible race condition
@@ -250,7 +272,13 @@ func (q *PQ) enqueue(bf byteframe) (err error) {
 			return fmt.Errorf("node not exists")
 		}
 
-		node.frames.push(flushingFrame{bf.data, bf.forceFlush})
+		node.frames.push(flushingFrame{
+			Buffer:       bf.data,
+			forceFlush:   bf.forceFlush,
+			streamClosed: bf.stream.State() == ClosedState,
+		})
+
+		// pushing to frames can be blocked; avoiding deadlock
 		q.mu.Lock()
 
 		q.dataQ[node.rank].push(node)
