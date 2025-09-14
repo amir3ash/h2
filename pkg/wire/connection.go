@@ -26,7 +26,6 @@ var framers = &framerPool{}
 
 var ErrIdleConnection = errors.New("idle connection timeout")
 
-
 type connectionState uint8
 
 const (
@@ -170,8 +169,8 @@ func newConnection(ctx context.Context, conn net.Conn, signalWrite func(*PQ)) *C
 		controlQ:     newExRing[*bytes.Buffer](),
 		headerQ:      newExRing[queueHeaderFrame](),
 		nodes:        make(map[uint32]*priorityNode),
-		writeCond:    *sync.NewCond(nopLocker{}),
 	}
+	queue.writeCond = *sync.NewCond(&queue.mu)
 
 	for i := range queue.dataQ {
 		queue.dataQ[i] = newLinkedQ[*priorityNode]()

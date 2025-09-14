@@ -177,7 +177,7 @@ func (srv *Server) newConnection(conn net.Conn) (*Connection, error) {
 		sigWrite = srv.l.netWriter.addRunnable
 	} else {
 		sigWrite = func(q *PQ) {
-			if q.wait {
+			if q.numQueued <= 1 {
 				q.writeCond.Signal()
 			}
 		}

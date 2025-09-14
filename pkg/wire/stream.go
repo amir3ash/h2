@@ -181,6 +181,7 @@ func (s *Stream) onDataFrame(frame *DataFrame) (err error) {
 			s.swapState(HalfClosedRemoteState)
 		} else {
 			s.swapState(ClosedState)
+			s.endStream()
 		}
 		// TODO: should we check for reseved state?
 	}
@@ -281,7 +282,7 @@ func (s *Stream) WriteHeaders(headers []hpack.HeaderField, priority PriorityPara
 			s.casState(ss, HalfClosedLocalState)
 		case HalfClosedRemoteState:
 			s.casState(ss, ClosedState)
-			// s.endStream()
+			// endStream will be called in PQ.pullHeader
 		}
 	} else if ss == IdleState {
 		oldState = s.swapState(OpenState)
@@ -382,9 +383,9 @@ func (s *Stream) EndWithTrailers(trailers []hpack.HeaderField) error {
 		s.swapState(ClosedState)
 	} else {
 		s.swapState(HalfClosedLocalState)
+		s.endStream()
 	}
 
-	// TODO: can we send nil prority in trailer?
 	// in closed state its nop, but what about half-closed-local
 	const endStream = true
 	return s.conn.que.WriteHeaders(s, trailers, PriorityParam{}, endStream)

@@ -76,7 +76,8 @@ type PQ struct {
 	addToRunnables func(*PQ)
 
 	writeCond sync.Cond
-	wait      bool
+	numQueued int32
+	mu        sync.Mutex // guard against pushing/pulling frames concurrently
 }
 
 func (q *PQ) startWriteLoop() {
@@ -86,18 +87,24 @@ func (q *PQ) startWriteLoop() {
 			return
 		}
 
+		q.writeCond.L.Lock()
+
 		data, _ = q.findNext()
 		// wait until connection closed or a frame enqueued.
-		q.writeCond.L.Lock()
 		for data == nil {
-			q.wait = true
-			q.writeCond.Wait()
+			if q.numQueued == 0 {
+				q.writeCond.Wait()
+			}
 			if q.h2Conn.closeDone.Load() != nil {
-				return
+				return // TODO: remianing queued frames (ex. data, header) will be ignored. fix it.
 			}
 			data, _ = q.findNext()
 		}
-		q.wait = false
+
+		q.numQueued--
+		if q.numQueued < 0 {
+			panic("internal: negetive counter")
+		}
 		q.writeCond.L.Unlock()
 
 		dataLen := data.Len()
@@ -233,6 +240,7 @@ func (q *PQ) changePriority(streamID uint32, weight uint8, exclusive bool) {
 
 func (q *PQ) enqueue(bf byteframe) (err error) {
 	if bf.control {
+		q.mu.Lock()
 		q.controlQ.push(bf.data)
 	} else {
 		q.nodesMu.Lock()
@@ -243,11 +251,15 @@ func (q *PQ) enqueue(bf byteframe) (err error) {
 		}
 
 		node.frames.push(flushingFrame{bf.data, bf.forceFlush})
-		q.dataQ[node.rank].push(node)
+		q.mu.Lock()
 
+		q.dataQ[node.rank].push(node)
 	}
 
+	q.numQueued++
 	q.addToRunnables(q)
+	q.mu.Unlock()
+
 	return nil
 }
 
@@ -291,6 +303,9 @@ func (q *PQ) write() (err error, hasMore bool) {
 }
 
 func (q *PQ) WriteHeaders(stream *Stream, headers []hpack.HeaderField, priority PriorityParam, endStream bool) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	q.headerQ.push(queueHeaderFrame{
 		streamID:  stream.id,
 		headers:   headers,
@@ -298,6 +313,7 @@ func (q *PQ) WriteHeaders(stream *Stream, headers []hpack.HeaderField, priority 
 		stream:    stream,
 	})
 
+	q.numQueued++
 	q.addToRunnables(q)
 
 	if endStream {
