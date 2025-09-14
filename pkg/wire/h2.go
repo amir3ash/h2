@@ -117,8 +117,9 @@ func (srv Server) Serve(l net.Listener) error {
 				tlsState := new(tls.ConnectionState)
 				*tlsState = tlsConn.ConnectionState()
 				if proto := tlsState.NegotiatedProtocol; proto == "h2" {
+					ctx := context.WithValue(ctx, TlsConnectionStateKey{}, tlsState)
 
-					h2Conn, err := srv.newConnection(tlsConn)
+					h2Conn, err := srv.newConnection(ctx, tlsConn)
 					if err != nil {
 						return
 					}
@@ -139,7 +140,7 @@ func (srv Server) Serve(l net.Listener) error {
 					return
 				}
 
-				h2Conn, err := srv.newConnection(tc)
+				h2Conn, err := srv.newConnection(ctx, tc)
 				if err != nil {
 					slog.Error("can not create new connection", "err", err.Error())
 					return
@@ -153,13 +154,13 @@ func (srv Server) Serve(l net.Listener) error {
 				closeConn = false
 				return
 			} else {
-				h2Conn, err := srv.newConnection(rw)
+				h2Conn, err := srv.newConnection(ctx, rw)
 				if err != nil {
 					return
 				}
 
 				if err := srv.l.addConn(h2Conn); err != nil {
-					slog.Error("can not add new conn", "connType", "tls", "err", err)
+					slog.Error("can not add new conn", "connType", "other", "err", err)
 					return
 				}
 
@@ -171,7 +172,7 @@ func (srv Server) Serve(l net.Listener) error {
 	}
 }
 
-func (srv *Server) newConnection(conn net.Conn) (*Connection, error) {
+func (srv *Server) newConnection(ctx context.Context, conn net.Conn) (*Connection, error) {
 	var sigWrite func(*PQ)
 	if _, ok := conn.(*tcpConn); ok && useWriteLoop {
 		sigWrite = srv.l.netWriter.addRunnable
@@ -183,7 +184,7 @@ func (srv *Server) newConnection(conn net.Conn) (*Connection, error) {
 		}
 	}
 
-	h2Conn := newConnection(context.TODO(), conn, sigWrite)
+	h2Conn := newConnection(ctx, conn, sigWrite)
 	h2Conn.isServer = true
 
 	if h2Conn.isServer && h2Conn.state < PrefaceRecieved {
@@ -260,3 +261,5 @@ func UseCustomTcp(val bool) serverOpts {
 		conf.useCustomTcp = val
 	}
 }
+
+type TlsConnectionStateKey struct{}

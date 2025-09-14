@@ -224,6 +224,11 @@ func (conn *Connection) Context() context.Context {
 	return conn.ctx
 }
 
+// RemoteAddr returns the remote network address, if known.
+func (conn *Connection) RemoteAddr() net.Addr {
+	return conn.wireConn.RemoteAddr()
+}
+
 func (conn *Connection) NewIdleStream() (*Stream, error) {
 	return conn.newStream(0, IdleState)
 }

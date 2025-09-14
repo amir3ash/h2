@@ -66,6 +66,9 @@ func (s *Stream) ID() uint32 {
 func (s *Stream) Connection() *Connection {
 	return s.conn
 }
+func (s *Stream) Context() context.Context {
+	return s.ctx
+}
 
 func (s *Stream) State() streamState {
 	return streamState(s.state.Load())
