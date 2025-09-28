@@ -187,15 +187,23 @@ func (w *res) Write(p []byte) (int, error) {
 	}
 	return w.doWrite(p)
 }
-func (w *res) doWrite(p []byte) (int, error) {
+func (w *res) doWrite(p []byte) (n int, err error) {
 	l := uint64(len(w.smallResponseBuf) + len(p))
 
 	if !w.headerWritten {
 		w.sniffContentType(w.smallResponseBuf)
-		if err := w.writeHeader(w.status, l == 0); err != nil {
+		zeroData := l == 0
+
+		streamEnded, err := w.writeHeader(w.status, zeroData)
+		if err != nil {
 			return 0, maybeReplaceError(err)
 		}
 		w.headerWritten = true
+
+		if streamEnded {
+			w.smallResponseBuf = w.smallResponseBuf[:0]
+			return 0, nil
+		}
 	}
 
 	endStream := w.handlerFinished && len(w.trailersMap) == 0
@@ -212,9 +220,6 @@ func (w *res) doWrite(p []byte) (int, error) {
 		}
 	}
 
-	var n int
-	var err error
-
 	n, err = w.stream.WriteAllOfData(p, endStream)
 	if err != nil {
 		return n, maybeReplaceError(err)
@@ -222,14 +227,14 @@ func (w *res) doWrite(p []byte) (int, error) {
 	return n, nil
 }
 
-func (w *res) writeHeader(status int, zeroLenData bool) error {
+func (w *res) writeHeader(status int, zeroLenData bool) (streamEnded bool, err error) {
 	headers := make([]hpack.HeaderField, 0, 1)
 	headers = append(headers, hpack.HeaderField{Name: ":status", Value: strconv.Itoa(status)})
 
 	// Handle trailer fields
 	if vals, ok := w.header["Trailer"]; ok {
 		for _, val := range vals {
-			for _, trailer := range strings.Split(val, ",") {
+			for trailer := range strings.SplitSeq(val, ",") {
 				// We need to convert to the canonical header key value here because this will be called when using
 				// headers.Add or headers.Set.
 				trailer = textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(trailer))
@@ -252,8 +257,9 @@ func (w *res) writeHeader(status int, zeroLenData bool) error {
 	}
 
 	endStream := (w.handlerFinished && len(w.trailersMap) == 0 && zeroLenData) || w.isHead
-	err := w.stream.WriteHeaders(headers, h2.PriorityParam{}, endStream)
-	return err
+	err = w.stream.WriteHeaders(headers, h2.PriorityParam{}, endStream)
+
+	return endStream, err
 }
 
 func (w *res) FlushError() error {
